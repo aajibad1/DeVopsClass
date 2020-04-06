@@ -2,29 +2,30 @@ provider "aws" {
   region = "us-east-1"
 }
 
-resource "aws_vpc" "main" {
-  cidr_block = "10.0.0.0/16"
+resource "aws_vpc" "prod-vpc" {
+  cidr_block           = "10.0.0.0/16"
+  enable_dns_support   = "true"        #gives you an internal domain name
+  enable_dns_hostnames = "true"        #gives you an internal host name
+  enable_classiclink   = "false"
+  instance_tenancy     = "default"
 
-  #enable dns hostname
-  enable_dns_hostnames = true
-
-  tags = {
-    Name = "main"
+  tags {
+    Name = "prod-vpc"
   }
 }
 
-resource "aws_subnet" "public_subnet" {
+resource "aws_subnet" "prod-subnet-public-1" {
+  vpc_id                  = "${aws_vpc.prod-vpc.id}"
   cidr_block              = "10.0.1.0/24"
-  vpc_id                  = "${aws_vpc.main.id}"
-  map_public_ip_on_launch = "true"
+  map_public_ip_on_launch = "true"                   //it makes this a public subnet
 
-  tags = {
-    Name = "public_subnet"
+  tags {
+    Name = "prod-subnet-public-1"
   }
 }
 
 resource "aws_subnet" "private_subnet" {
-  vpc_id     = "${aws_vpc.main.id}"
+  vpc_id     = "${aws_vpc.prod-vpc.id}"
   cidr_block = "10.0.3.0/24"
 
   tags = {
@@ -33,7 +34,7 @@ resource "aws_subnet" "private_subnet" {
 }
 
 resource "aws_internet_gateway" "gw" {
-  vpc_id = "${aws_vpc.main.id}"
+  vpc_id = "${aws_vpc.prod-vpc.id}"
 
   tags = {
     Name = "main"
@@ -125,7 +126,7 @@ resource "aws_internet_gateway" "gw" {
 # }
 
 resource "aws_route_table" "public_route" {
-  vpc_id = "${aws_vpc.main.id}"
+  vpc_id = "${aws_vpc.prod-vpc.id}"
 
   route {
     cidr_block = "0.0.0.0/0"
@@ -138,110 +139,111 @@ resource "aws_route_table" "public_route" {
 }
 
 resource "aws_route_table_association" "public_route_table" {
-  subnet_id      = "${aws_subnet.public_subnet.id}"
+  subnet_id      = "${aws_subnet.prod-subnet-public-1.id}"
   route_table_id = "${aws_route_table.public_route.id}"
 }
 
-resource "aws_security_group" "allow_http" {
-  name        = "allow_http"
-  description = "Allow http inbound traffic"
-  vpc_id      = "${aws_vpc.main.id}"
+resource "aws_security_group" "ssh-allowed" {
+  vpc_id = "${aws_vpc.prod-vpc.id}"
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = -1
+    cidr_blocks = ["0.0.0.0/0"]
+  }
 
   ingress {
-    description = "http from VPC"
+    from_port = 22
+    to_port   = 22
+    protocol  = "tcp"
+
+    // This means, all ip address are allowed to ssh !
+    // Do not do it in the production.
+    // Put your office or home address in it!
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  //If you do not add this rule, you can not reach the NGIX
+  ingress {
     from_port   = 80
     to_port     = 80
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
   ingress {
-    description = "ssh"
-    from_port   = 22
-    to_port     = 22
+    from_port   = 8080
+    to_port     = 8080
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  tags = {
-    Name = "allow_http"
+  tags {
+    Name = "ssh-allowed"
   }
 }
 
-resource "aws_security_group" "allow_https" {
-  name        = "allow_https"
-  description = "Allow https inbound traffic"
-  vpc_id      = "${aws_vpc.main.id}"
-
-  ingress {
-    description = "http from VPC"
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  tags = {
-    Name = "allow_https"
-  }
-}
+# resource "aws_security_group" "allow_https" {
+#   name        = "allow_https"
+#   description = "Allow https inbound traffic"
+#   vpc_id      = "${aws_vpc.prod-vpc.id}"
+#
+#   ingress {
+#     description = "http from VPC"
+#     from_port   = 443
+#     to_port     = 443
+#     protocol    = "tcp"
+#     cidr_blocks = ["0.0.0.0/0"]
+#   }
+#
+#   egress {
+#     from_port   = 0
+#     to_port     = 0
+#     protocol    = "-1"
+#     cidr_blocks = ["0.0.0.0/0"]
+#   }
+#
+#   tags = {
+#     Name = "allow_https"
+#   }
+# }
 
 resource "aws_instance" "jenkins" {
-  ami           = "ami-09a5b0b7edf08843d"
+  ami           = "ami-07ebfd5b3428b6f4d"
   instance_type = "t2.micro"
-  subnet_id     = "${aws_subnet.public_subnet.id}"
-  key_name      = "mykeypair"
+  subnet_id     = "${aws_subnet.prod-subnet-public-1.id}"
+  key_name      = "newkey"
 
   #add associate_public_ip_address
   associate_public_ip_address = true
 
   #add source check
   source_dest_check      = false
-  vpc_security_group_ids = ["${aws_security_group.allow_https.id}", "${aws_security_group.allow_http.id}"]
+  vpc_security_group_ids = ["${aws_security_group.ssh-allowed.id}"]
 
   tags = {
     Name = "jenkins"
   }
 }
 
-resource "aws_eip" "web-1" {
-  instance = "${aws_instance.jenkins.id}"
-  vpc      = true
-}
+# resource "aws_eip" "web-1" {
+#   instance = "${aws_instance.jenkins.id}"
+#   vpc      = true
+# }
 
 resource "aws_instance" "tomcat" {
-  ami           = "ami-09a5b0b7edf08843d"
+  ami           = "ami-0c322300a1dd5dc79"
   instance_type = "t2.micro"
-  subnet_id     = "${aws_subnet.public_subnet.id}"
-  key_name      = "mykeypair"
+  subnet_id     = "${aws_subnet.prod-subnet-public-1.id}"
+  key_name      = "newkey"
 
   #add associate_public_ip_address
   associate_public_ip_address = true
 
   #add source check
   source_dest_check      = false
-  vpc_security_group_ids = ["${aws_security_group.allow_https.id}", "${aws_security_group.allow_http.id}"]
+  vpc_security_group_ids = ["${aws_security_group.ssh-allowed.id}"]
 
   tags = {
     Name = "tomcat"
